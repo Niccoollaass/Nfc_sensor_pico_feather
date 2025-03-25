@@ -36,7 +36,8 @@ void setup() {
 void loop() {
     // Lecture des données NFC en boucle
     delay(3000);
-    writeNewURL();
+   // writeNewURL();
+   readStoredData();
 }
 
 // Écriture d'une URL NFC

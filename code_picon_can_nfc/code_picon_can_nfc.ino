@@ -58,6 +58,9 @@ void loop() {
     can.receive(msg);
     handleFrame(msg);
   }
+  readStoredData();
+  delay(3000);
+  
 }
 
 void handleFrame(const CANMessage &msg) {
@@ -65,14 +68,15 @@ void handleFrame(const CANMessage &msg) {
     case 0x200:
       arg1 = ""; arg2 = ""; arg3 = "";
       receiving = true;
-      if (msg.data[0] == 0x01) { // Écriture
+      if (msg.data[0] == 0x01) {
         type_message = msg.data[1];
         expected_t1 = msg.data[2];
         expected_t2 = msg.data[3];
         expected_t3 = msg.data[4];
         Serial.println("Demande d'écriture reçue");
-      } else if (msg.data[0] == 0x02) { // Lecture
-        handleReadRequest();
+      } else if (msg.data[0] == 0x02) {
+        Serial.println("Demande de lecture reçue");
+        readStoredData();
       }
       break;
 
@@ -102,7 +106,7 @@ void handleFrame(const CANMessage &msg) {
 }
 
 void handleWriteRequest() {
-  Serial.println("Écriture NFC");
+  Serial.println("\n-> Écriture sur le tag NFC...");
   switch (type_message) {
     case 0x01:
       st25dv.writeURI("https://", arg1, ""); break;
@@ -115,73 +119,137 @@ void handleWriteRequest() {
     case 0x05:
       st25dv.writeEMail(arg1, arg2, arg3, ""); break;
   }
-  Serial.println("Écriture terminée");
+  Serial.println("-> Écriture terminée.");
 }
 
-void handleReadRequest() {
-  Serial.println("Lecture NFC");
-  String a1 = "", a2 = "", a3 = "";
-  uint8_t t1 = 0, t2 = 0, t3 = 0;
-  type_message = st25dv.readNDEFType();
+void readStoredData() {
+  String type,arg1,arg2,arg3;
 
-  CANMessage out;
-  out.id = 0x300;
-  out.len = 8;
-  out.data[0] = 0x02; // lecture
-  out.data[1] = type_message;
+  String dataURL;
+  if (st25dv.readURI(&dataURL) == ST25DV_OK) {
+    Serial.print("-> unaURL : "); Serial.println(dataURL);
+    Serial.print("-> unaURL complète : "); Serial.println(dataURL);
+    type="URL";
+    arg1=dataURL;
+    arg2="";
+    arg3="";
+  }
+  String dataUnaULR;
+  if (st25dv.readUnabridgedURI(&dataUnaULR) == ST25DV_OK) {
+    Serial.print("-> URL : "); Serial.println(dataUnaULR);
+    Serial.print("-> URL complète : "); Serial.println(dataUnaULR);
+    type="UnaURL";
+    arg1=dataUnaULR;
+    arg2="";
+    arg3="";
 
-  switch (type_message) {
-    case 0x01:
-    case 0x02:
-      if (st25dv.readURI(&a1) == 0) t1 = sendFragments(0x301, a1);
-      break;
-    case 0x03:
-      if (st25dv.readGEO(&a1, &a2) == 0) {
-        t1 = sendFragments(0x301, a1);
-        t2 = sendFragments(0x302, a2);
-      }
-      break;
-    case 0x04:
-      if (st25dv.readSMS(&a1, &a2) == 0) {
-        t1 = sendFragments(0x301, a1);
-        t2 = sendFragments(0x302, a2);
-      }
-      break;
-    case 0x05:
-      if (st25dv.readEMail(&a1, &a2, &a3) == 0) {
-        t1 = sendFragments(0x301, a1);
-        t2 = sendFragments(0x302, a2);
-        t3 = sendFragments(0x303, a3);
-      }
-      break;
   }
 
-  out.data[2] = t1;
-  out.data[3] = t2;
-  out.data[4] = t3;
-  out.data[5] = out.data[6] = out.data[7] = 0;
-  can.tryToSend(out);
+  String email, subject, message;
+  if (st25dv.readEMail(&email, &subject, &message) == ST25DV_OK) {
+    Serial.print("-> Email : "); Serial.println(email);
+    Serial.print("-> Sujet : "); Serial.println(subject);
+    Serial.print("-> Message : "); Serial.println(message);
+    type="email";
+    arg1=email;
+    arg2=subject;
+    arg3=message;
+  }
 
-  delay(5);
-  CANMessage fin;
-  fin.id = 0x305;
-  fin.len = 8;
-  for (int i = 0; i < 8; i++) fin.data[i] = 0xFF;
-  can.tryToSend(fin);
+  String num, sms;
+  if (st25dv.readSMS(&num, &sms) == ST25DV_OK) {
+    Serial.print("-> Numéro : "); Serial.println(num);
+    Serial.print("-> SMS : "); Serial.println(sms);
+    type="SMS";
+    arg1=num;
+    arg2=sms;
+    arg3="";
+  }
+
+  String lat, lon;
+  if (st25dv.readGEO(&lat, &lon) == ST25DV_OK) {
+    Serial.print("-> Latitude : "); Serial.println(lat);
+    Serial.print("-> Longitude : "); Serial.println(lon);
+    type="GEO";
+    arg1=lat;
+    arg2=lon;
+    arg3="";
+  }
+
+  Serial.println("-> Lecture terminée.\n");
+  SendNFCDataToCan(type,arg1,arg2,arg3);
 }
+void SendNFCDataToCan(String type, String arg1, String arg2, String arg3) {
+  CANMessage msg;
 
-uint8_t sendFragments(uint32_t base_id, const String &msg) {
-  uint8_t index = 0;
-  for (uint16_t i = 0; i < msg.length(); i += 7) {
-    CANMessage part;
-    part.id = base_id;
-    part.len = 8;
-    part.data[0] = index++;
-    for (uint8_t j = 0; j < 7; j++) {
-      part.data[j + 1] = (i + j < msg.length()) ? msg[i + j] : 0;
+  // Envoi du type de données (0x300)
+  msg.id = 0x300;
+  msg.len = 8;
+  msg.data[0] = 0; // Index (inutile ici)
+  if (type == "URL") {
+    msg.data[1] = 0x01;
+  } else if (type == "UnaURL") {
+    msg.data[1] = 0x02;
+  } else if (type == "GEO") {
+    msg.data[1] = 0x03;
+  } else if (type == "SMS") {
+    msg.data[1] = 0x04;
+  } else if (type == "email") {
+    msg.data[1] = 0x05;
+  } else {
+    msg.data[1] = 0x00; // Type inconnu
+  }
+  for (int i = 2; i < 8; i++) msg.data[i] = 0;
+  can.tryToSend(msg);
+
+  // Envoi de arg1 (0x301)
+  for (int i = 0; i < arg1.length(); i += 7) {
+    msg.id = 0x301;
+    msg.len = 8;
+    msg.data[0] = i / 7; // Index de la trame
+    for (int j = 0; j < 7; j++) {
+      if (i + j < arg1.length()) {
+        msg.data[j + 1] = arg1[i + j];
+      } else {
+        msg.data[j + 1] = 0;
+      }
     }
-    can.tryToSend(part);
-    delay(2);
+    can.tryToSend(msg);
   }
-  return index;
+
+  // Envoi de arg2 (0x302)
+  for (int i = 0; i < arg2.length(); i += 7) {
+    msg.id = 0x302;
+    msg.len = 8;
+    msg.data[0] = i / 7; // Index de la trame
+    for (int j = 0; j < 7; j++) {
+      if (i + j < arg2.length()) {
+        msg.data[j + 1] = arg2[i + j];
+      } else {
+        msg.data[j + 1] = 0;
+      }
+    }
+    can.tryToSend(msg);
+  }
+
+  // Envoi de arg3 (0x303)
+  for (int i = 0; i < arg3.length(); i += 7) {
+    msg.id = 0x303;
+    msg.len = 8;
+    msg.data[0] = i / 7; // Index de la trame
+    for (int j = 0; j < 7; j++) {
+      if (i + j < arg3.length()) {
+        msg.data[j + 1] = arg3[i + j];
+      } else {
+        msg.data[j + 1] = 0;
+      }
+    }
+    can.tryToSend(msg);
+  }
+
+  // Envoi de la fin de la transmission (0x305)
+  msg.id = 0x305;
+  msg.len = 8;
+  for (int i = 0; i < 8; i++) msg.data[i] = 0xFF;
+  can.tryToSend(msg);
 }
